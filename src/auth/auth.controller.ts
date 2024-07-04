@@ -29,18 +29,6 @@ export class AuthController {
 signIn(@Body() user_data: signInDto){
     return this.authService.signIn(user_data);
   }
-  //new lines
-//   @Post('refresh')
-//     async refresh(@Body() refreshTokenDto: string) {
-//       return this.authService.refreshToken(refreshTokenDto);
-//     }
-//
-//     @Post('logout')
-// async logout(@Body('userId') userId: number) {
-//   await this.authService.revokeRefreshToken(userId);
-//   return { message: 'Logged out successfully' };
-// }
-
 
   @Post('register')
   @UseInterceptors(FileInterceptor('profilePicture', {
