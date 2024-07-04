@@ -11,6 +11,7 @@ import { RolesGuard } from './roles.guard';
 import { ApiConsumes, ApiBody, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { registerUserDto } from '../users/dto/registerUser.Dto';
 import { verifyUserDto } from '../users/dto/verifyUser.Dto';
+import { RefreshTokenDto } from '../users/dto/RefreshToken.Dto';
 import { resendOtpDto } from '../users/dto/resendOtp.Dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage,Multer } from 'multer';
@@ -29,12 +30,12 @@ export class AuthController {
 signIn(@Body() user_data: signInDto){
     return this.authService.signIn(user_data);
   }
-  //new lines
-//   @Post('refresh')
-//     async refresh(@Body() refreshTokenDto: string) {
-//       return this.authService.refreshToken(refreshTokenDto);
-//     }
-//
+   
+  @Post('refresh')
+    async refresh(@Body() refreshTokenDto: RefreshTokenDto) {
+      return this.authService.refreshToken(refreshTokenDto);
+    }
+
 //     @Post('logout')
 // async logout(@Body('userId') userId: number) {
 //   await this.authService.revokeRefreshToken(userId);

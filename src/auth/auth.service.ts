@@ -6,37 +6,71 @@ import { User } from '../users/entities/user.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as nodemailer from 'nodemailer';
-import { verifyUserDto } from '../users/dto/verifyUser.Dto';
 import { Redis } from 'ioredis'; // Import ioredis
-//import {REDIS_CLIENT}  from './'
 import * as bcrypt from 'bcrypt';
-  
+
 @Injectable()
 export class AuthService {
-  @Inject('REDIS_CLIENT') 
-  private readonly redisClient: Redis; // Injecting Redis client 
+  @Inject('REDIS_CLIENT')
+  private readonly redisClient: Redis; // Injecting Redis client
 
-  constructor( 
+  constructor(
     private jwtService: JwtService,
     @InjectRepository(User)
     private userRepository: Repository<User>
   ) {}
 
-  // Verifying username and password and returning access token
-  async signIn(user_data: signInDto): Promise<{ access_token: string }> {
-    const user = await this.userRepository.findOne({
-      where: { email: user_data.email },
-    });
-    console.log(user_data, user);
-    if (user?.password !== user_data.password || user?.isVerified === false) {
-      throw new UnauthorizedException();
-    }
 
-    const payload = { id: user.id, username: user.username, role: user.role };
-    return {
-      access_token: await this.jwtService.signAsync(payload, { secret: process.env.JWT_SECRET }),
-    };
-  }
+   async signIn(user_data: signInDto): Promise<{ access_token: string; refresh_token: string }> {
+     const user = await this.userRepository.findOne({
+       where: { email: user_data.email },
+     });
+
+     if (!user || !await bcrypt.compare(user_data.password, user.password) || user.isVerified === false) {
+       throw new UnauthorizedException();
+     }
+
+     const payload = { id: user.id, username: user.username, role: user.role };
+     const access_token = await this.jwtService.signAsync(payload, { secret: process.env.JWT_SECRET, expiresIn: '2m' });
+     const refresh_token = await this.jwtService.signAsync(payload, { secret: process.env.JWT_REFRESH_SECRET, expiresIn: '5m' });
+
+     await this.saveRefreshToken(refresh_token);
+
+     return {
+       "access_token":access_token,
+       "refresh_token":refresh_token,
+     };
+   }
+
+   async refreshToken(refreshTokenDto: any): Promise<{ access_token: string }> {
+     const  refreshToken  = refreshTokenDto.refresh_token;
+     
+      console.log(refreshToken);
+     try {
+       const payload = await this.jwtService.verifyAsync(refreshToken, { secret: process.env.JWT_REFRESH_SECRET });
+
+       const storedToken = await this.redisClient.get('r_token');
+       console.log("\n",storedToken);
+       if (storedToken !== refreshToken) {
+         throw new UnauthorizedException('Invalid refresh token');
+       }
+
+       const newAccessToken = await this.jwtService.signAsync({ id: payload.id, username: payload.username, role: payload.role }, { secret: process.env.JWT_SECRET, expiresIn: '15m' });
+
+       return { access_token: newAccessToken };
+     } catch (error) {
+       throw new UnauthorizedException('Invalid refresh tokenn');
+     }
+   }
+
+   async saveRefreshToken(refreshToken: string): Promise<void> {
+     await this.redisClient.set('r_token', refreshToken, 'EX', 5*60); // 7 days expiration
+   }
+
+   async revokeRefreshToken(): Promise<void> {
+     await this.redisClient.del('r_token');
+   }
+
 
   // Registering a new user and sending an OTP for verification
   async registerUser(data: any): Promise<object> {
@@ -49,8 +83,8 @@ export class AuthService {
       const savedUser = await this.userRepository.save(userData);
 
       const otp = this.generateOtp();
-      await this.saveOtp(savedUser["email"], otp); // Save OTP to Redis
-      await this.sendOtpEmail(savedUser['email'], otp);
+      await this.saveOtpEmail(savedUser["email"], otp); // Save OTP to Redis
+      await this.sendOtp(savedUser['email'], otp);
 
       return savedUser;
     } catch (error) {
@@ -68,8 +102,8 @@ export class AuthService {
     }
 
     const otp = this.generateOtp();
-    await this.saveOtp(email, otp); // Save OTP to Redis
-    await this.sendOtpEmail(email, otp);
+    await this.saveOtpEmail(email, otp); // Save OTP to Redis
+    await this.sendOtp(email, otp);
 
     return { message: 'OTP sent successfully!' };
   }
@@ -80,7 +114,7 @@ export class AuthService {
   }
 
   // Helper function to send OTP email
-  private async sendOtpEmail(email: string, otp: string): Promise<void> {
+  private async sendOtp(email: string, otp: string): Promise<void> {
     const transporter = nodemailer.createTransport({
       host: 'smtp.gmail.com',
       port: 587,
@@ -103,50 +137,63 @@ export class AuthService {
   }
 
   // Verifying the OTP
-  async verify(data: verifyUserDto): Promise<object> {
-    const user = await this.userRepository.findOne({
-      where: { email: data.email },
-    });
+  async verify(userOtp: any): Promise<object> {
 
-    if (!user) {
-      throw new UnauthorizedException('Wrong email address!');
-    }
-
-    const storedOtp = await this.retrieveOtp(data.email);
+    const storedOtp = await this.retrieveOtp();
+    const storedEmail=await this.retrieveEmail();
+    console.log('stored otp:', storedOtp, "UserOtp", userOtp );
 
     if (!storedOtp) {
       throw new UnauthorizedException('OTP expired!');
     }
-
-    if (storedOtp === data.otp) {
-      await this.redisClient.del(data.email); // Delete OTP from Redis after successful verification
+    if (storedOtp === userOtp.otp) {
       
+
+      const user = await this.userRepository.findOne({
+        where: { email: storedEmail },
+      });
+
+      await this.redisClient.del("otp"); // Delete OTP from Redis after successful verification
+      await this.redisClient.del("email"); // Delete OTP from Redis after successful verification
       user.isVerified = true;
       await this.userRepository.save(user);
 
-      const payload = { id: user.id, username: user.username, role: user.role };
-      return {
-      access_token: await this.jwtService.signAsync(payload, { secret: process.env.JWT_SECRET }),
-    };
+     const payload = { id: user.id, username: user.username, role: user.role };
+     const access_token = await this.jwtService.signAsync(payload, { secret: process.env.JWT_SECRET, expiresIn: '2m' });
+     const refresh_token = await this.jwtService.signAsync(payload, { secret: process.env.JWT_REFRESH_SECRET, expiresIn: '5m' });
 
-       
+     await this.saveRefreshToken( refresh_token);
+
+     return {
+       "access_token":access_token,
+       "refresh_token":refresh_token,
+     };
+
+
     } else {
       throw new UnauthorizedException('Invalid OTP');
     }
   }
 
   // Helper function to save OTP to Redis with expiry
-  private async saveOtp(email: string, otp: string): Promise<void> {
-    await this.redisClient.set(email, otp, 'EX', 120); // Set OTP with expiry of 120 seconds (2 minutes)
+  private async saveOtpEmail(email: string, otp: string): Promise<void> {
+    await this.redisClient.set('otp', otp, 'EX', 120); // Set OTP with expiry of 120 seconds (2 minutes)
+    await this.redisClient.set('email', email); // Set OTP with expiry of 120 seconds (2 minutes)
+
   }
 
   // Helper function to retrieve OTP from Redis
-  private async retrieveOtp(email: string): Promise<string | null> {
-    return await this.redisClient.get(email);
+  private async retrieveOtp(): Promise<string | null> {
+    return await this.redisClient.get("otp");
   }
-   
+
+  // Helper function to retrieve email from Redis
+   private async retrieveEmail(): Promise<string | null> {
+    return await this.redisClient.get("email");
+  }
+
   // Returning a user profile
-  async getProfile(username: string): Promise<User> { 
+  async getProfile(username: string): Promise<User> {
     const user = await this.userRepository.findOne({
       where: { username },
     });

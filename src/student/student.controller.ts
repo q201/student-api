@@ -4,7 +4,7 @@ import { StudentService } from './student.service';
 import { CreateStudentDto } from './dto/create-student.dto';
 import { UpdateStudentDto } from './dto/update-student.dto';
 import { PaginationDto } from './dto/pagination.dto';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiTags,ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -19,6 +19,7 @@ export class StudentController {
   @UseGuards(RolesGuard) 
   @Roles([Role.Admin])
   @UseGuards(AuthGuard)
+  @ApiBearerAuth('JWT')
   @Post()
   createStudent(@Body() data: CreateStudentDto) {
     return this.studentService.create(data);

@@ -7,7 +7,4 @@ export class verifyUserDto {
   @IsString()
   readonly otp: string;
 
-  @ApiProperty( )
-  @IsString()
-  readonly email: string;
 }
